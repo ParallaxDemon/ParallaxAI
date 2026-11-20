@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "android-re": {
+      "command": "python",
+      "args": ["/ABSOLUTE/PATH/TO/github/mcp/server.py"],
+      "env": {
+        "WORKSPACE": "/ABSOLUTE/PATH/TO/OWNED/BINARIES",
+        "GHIDRA_HOME": "/ABSOLUTE/PATH/TO/ghidra"
+      }
+    }
+  }
+}

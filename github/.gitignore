@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+output/
+*.apk
+*.dex
+*.so
+*.gguf
+.env
+*.jks
+*.keystore
+config.php
