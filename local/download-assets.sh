@@ -10,9 +10,9 @@ tar -xzf "$BASE/llama.tar.gz" -C "$BASE/bin" --strip-components=1
 chmod +x "$BASE/bin/llama-server"
 export LD_LIBRARY_PATH="$BASE/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 "$BASE/bin/llama-server" --version | head -1
-echo "[$(date)] downloading model"
+echo "[$(date)] downloading chat model (Qwen2.5-3B-Instruct — good Hinglish/multilingual, fast)"
 curl -fL --retry 5 --retry-delay 3 --continue-at - \
-  -o "$BASE/model/DeepSeek-R1-Distill-Qwen-1.5B-abliterated.Q4_K_M.gguf" \
-  "https://huggingface.co/mradermacher/DeepSeek-R1-Distill-Qwen-1.5B-abliterated-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-abliterated.Q4_K_M.gguf"
-ls -lh "$BASE/model/DeepSeek-R1-Distill-Qwen-1.5B-abliterated.Q4_K_M.gguf"
+  -o "$BASE/model/Qwen2.5-3B-Instruct-Q4_K_M.gguf" \
+  "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+ls -lh "$BASE/model/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
 echo "[$(date)] assets ready"

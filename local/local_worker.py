@@ -19,13 +19,41 @@ from pathlib import Path
 
 CONFIG = Path(os.environ.get("PARALLAX_LOCAL_CONFIG", "~/.config/parallax-ai/local-worker.json")).expanduser()
 LOG = Path("~/.local/share/parallax-local-worker.log").expanduser()
+SYSTEM_FILE = Path(__file__).with_name("system_prompt.txt")
 
-SYSTEM = (
-    "You are a helpful, concise assistant. Answer the user directly and briefly. "
-    "You are text-only: you cannot see, read, or open images or files. If an image is attached, "
-    "say you cannot see images and ask the user to describe it in text. "
-    "Never invent job metadata, findings or runtime observations."
+FALLBACK_SYSTEM = (
+    "You are ParallaxAI, a helpful concise assistant. Answer in the user's language "
+    "(reply in Hinglish if they write Hinglish). You are text-only: say so for images. "
+    "Never invent results."
 )
+
+
+def system_prompt():
+    """Load the merged all-agents persona; fall back if the file is missing."""
+    try:
+        text = SYSTEM_FILE.read_text(encoding="utf-8").strip()
+        return text or FALLBACK_SYSTEM
+    except OSError:
+        return FALLBACK_SYSTEM
+
+
+def clean_prompt(text):
+    """Strip hidden app metadata blocks so the small model sees only the real request.
+
+    AntiGem prepends [AntiGem app context: ...] to every agent's prompt, and the chat
+    backend wraps history as 'Continuing the same conversation...'. The hidden block
+    confuses a 1.5B model, so remove it before inference while keeping the useful
+    conversation history.
+    """
+    import re
+    s = text or ""
+    # Remove bracketed hidden context notes (single or multi-line) at the start.
+    s = re.sub(r"(?s)^\[AntiGem app context:.*?\]\s*", "", s)
+    # Remove hidden attached-file notes anywhere.
+    s = re.sub(r"(?s)\(Hidden note added by the AntiGem app:.*?(?=\n\n|\Z)", "", s)
+    # Remove the image-attachment warning the app appends for ParallaxAI.
+    s = re.sub(r"ParallaxAI is text-only[^\n]*", "", s)
+    return s.strip()
 
 
 def log(*args):
@@ -39,14 +67,21 @@ def cfg():
 
 
 def http(url, headers, data=None, timeout=30):
-    body = json.dumps(data).encode() if data is not None else None
-    h = dict(headers)
-    if body is not None:
-        h["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=body, headers=h, method="POST" if body is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = r.read().decode("utf-8", "replace")
-    return json.loads(raw) if raw else {}
+    """HTTP via curl: Android's Python resolver can fail in long-lived background
+    processes ('No address associated with hostname') while curl resolves fine.
+    """
+    cmd = ["curl", "-sS", "--max-time", str(timeout), "--retry", "1", "-w", "\n%{http_code}", url]
+    for k, v in headers.items():
+        cmd += ["-H", k + ": " + v]
+    if data is not None:
+        cmd += ["-X", "POST", "-H", "Content-Type: application/json", "--data-binary", json.dumps(data)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+    if proc.returncode != 0:
+        raise RuntimeError("curl failed: " + (proc.stderr or "").strip()[:200])
+    raw, _, code = proc.stdout.rpartition("\n")
+    if code != "200" and code != "202":
+        raise RuntimeError("HTTP " + code + " " + raw[:200])
+    return json.loads(raw) if raw.strip() else {}
 
 
 def healthy(port):
@@ -81,17 +116,20 @@ def ensure_llama(c, port):
 
 
 def infer(prompt, c, port):
+    messages = [
+        {"role": "system", "content": system_prompt()},
+        {"role": "user", "content": clean_prompt(prompt)[:23000]},
+    ]
+    # DeepSeek-R1 (reasoning model) burns tokens on hidden <think> blocks; a prefill
+    # that closes the block makes it answer directly. Instruct models (Qwen) must NOT
+    # use it. Controlled by the private config flag `prefill_think`.
+    prefill = bool(c.get("prefill_think", False))
+    if prefill:
+        messages.append({"role": "assistant", "content": "</think>\n\n"})
     body = {
-        "model": "local-deepseek",
-        # DeepSeek-R1 burns many tokens on hidden <think> reasoning. Prefilling an
-        # assistant turn that closes the think block makes it answer directly:
-        # ~2-6s instead of ~20-30s, with clean short replies for chat use.
-        "messages": [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": prompt[:23000]},
-            {"role": "assistant", "content": "</think>\n\n"},
-        ],
-        "temperature": 0.25,
+        "model": c.get("model_name", "local"),
+        "messages": messages,
+        "temperature": float(c.get("temperature", 0.3)),
         "max_tokens": int(c.get("max_tokens", 400)),
         "stream": False,
     }
@@ -104,15 +142,17 @@ def infer(prompt, c, port):
         data = json.load(r)
     msg = data["choices"][0]["message"]
     text = (msg.get("content") or msg.get("reasoning_content") or "[Model returned no text]")
-    return text.replace("</think>", "").strip()
+    if prefill:
+        text = text.replace("</think>", "")
+    return text.strip()
 
 
 def process(job, c, client_h, worker_h, port):
     jid = job["id"]
     try:
         claimed = http(c["base_url"].rstrip("/") + "/api/v1/worker/jobs/" + jid, worker_h, timeout=20)
-    except urllib.error.HTTPError as e:
-        log(jid, "not claimable:", e.code)
+    except Exception as e:
+        log(jid, "not claimable:", str(e)[:200])
         return False
     prompt = claimed.get("prompt") or job.get("prompt") or ""
     log(jid, "running chat job")
@@ -131,6 +171,7 @@ def main():
     worker_h = {"X-Worker-Key": c["worker_key"], "User-Agent": "ParallaxLocalWorker/1.0"}
     port = int(c.get("port", 8080))
     ensure_llama(c, port)
+    log("v2 curl-http worker ready")
     log("watching", base, "every", c.get("poll_seconds", 1.5), "s")
     while True:
         try:
