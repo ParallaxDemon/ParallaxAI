@@ -66,22 +66,47 @@ def cfg():
         return json.load(f)
 
 
-def http(url, headers, data=None, timeout=30):
-    """HTTP via curl: Android's Python resolver can fail in long-lived background
-    processes ('No address associated with hostname') while curl resolves fine.
-    """
-    cmd = ["curl", "-sS", "--max-time", str(timeout), "--retry", "1", "-w", "\n%{http_code}", url]
+PANEL_FALLBACK_IP = "104.21.33.84"  # Cloudflare IP for ai.parallaxserver.online
+
+
+def _curl(url, headers, data, timeout, resolve=None):
+    cmd = ["curl", "-sS", "--max-time", str(timeout), "--retry", "1", "-w", "\n%{http_code}"]
+    if resolve:
+        cmd += ["--resolve", resolve]
+    cmd += [url]
     for k, v in headers.items():
         cmd += ["-H", k + ": " + v]
     if data is not None:
         cmd += ["-X", "POST", "-H", "Content-Type: application/json", "--data-binary", json.dumps(data)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
     if proc.returncode != 0:
-        raise RuntimeError("curl failed: " + (proc.stderr or "").strip()[:200])
+        raise RuntimeError((proc.stderr or "curl failed").strip()[:200])
     raw, _, code = proc.stdout.rpartition("\n")
-    if code != "200" and code != "202":
+    if code not in ("200", "202"):
         raise RuntimeError("HTTP " + code + " " + raw[:200])
     return json.loads(raw) if raw.strip() else {}
+
+
+_RESOLVE_CACHE = {}
+
+
+def http(url, headers, data=None, timeout=30):
+    """HTTP via curl with a cached DNS fallback for the su/KernelSU boot context."""
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    key = (u.hostname, u.port or 443)
+    if key in _RESOLVE_CACHE:
+        return _curl(url, headers, data, timeout, resolve=_RESOLVE_CACHE[key])
+    try:
+        return _curl(url, headers, data, timeout)
+    except RuntimeError as e:
+        if "Could not resolve host" not in str(e) and "6" not in str(e):
+            raise
+        resolve = f"{u.hostname}:{u.port or 443}:{PANEL_FALLBACK_IP}"
+        result = _curl(url, headers, data, timeout, resolve=resolve)
+        _RESOLVE_CACHE[key] = resolve
+        log("DNS fallback cached ->", u.hostname, "=", PANEL_FALLBACK_IP)
+        return result
 
 
 def healthy(port):
