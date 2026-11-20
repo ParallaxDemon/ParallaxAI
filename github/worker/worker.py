@@ -175,7 +175,7 @@ def infer(prompt):
     # Server is available only inside the ephemeral runner, not over the public internet.
     llama='/tmp/llama.cpp/build/bin/llama-server'
     log=open(OUTPUT/'llama-server.log','w')
-    proc=subprocess.Popen([llama,'-hf',MODEL,'--host','127.0.0.1','--port','8080','-c','4096','-t','4','-ngl','0'],stdout=log,stderr=subprocess.STDOUT)
+    proc=subprocess.Popen([llama,'-hf',MODEL,'--host','127.0.0.1','--port','8080','-c','16384','-t','4','-ngl','0'],stdout=log,stderr=subprocess.STDOUT)
     try:
         deadline=time.monotonic()+540
         while time.monotonic()<deadline:
@@ -188,6 +188,10 @@ def infer(prompt):
         else:raise RuntimeError('Model startup timeout')
         req={'model':MODEL,'messages':[{'role':'system','content':'You are a code analysis assistant. Focus on authorized software, reproducible static analysis, and correct code edits. State uncertainty. Do not invent runtime observations.'},{'role':'user','content':prompt[:23000]}],'temperature':0.25,'max_tokens':1100,'stream':False}
         response=requests.post('http://127.0.0.1:8080/v1/chat/completions',json=req,timeout=420)
+        if response.status_code==400 and 'context' in response.text.lower():
+            # Static findings can exceed the model context. Retry with a smaller, still-useful prompt.
+            req['messages'][-1]['content']=prompt[:2000]
+            response=requests.post('http://127.0.0.1:8080/v1/chat/completions',json=req,timeout=420)
         response.raise_for_status()
         message=response.json()['choices'][0]['message']
         return message.get('content') or message.get('reasoning_content') or '[Model returned no text]' 
