@@ -7,7 +7,9 @@ try {
     if ($route==='v1/health' && $method==='GET') out(200,['ok'=>true,'service'=>'deepseek-re-bridge','mode'=>'async']);
     if ($route==='v1/models' && $method==='GET') { allowClient(); out(200,['models'=>[['id'=>'deepseek-r1-1.5b-abliterated-q4','mode'=>'job-based','local_on'=>'github-runner']]]); }
     if ($route==='v1/jobs' && $method==='GET') {
-        allowClient(); $s=db()->query('SELECT * FROM agent_jobs ORDER BY created_at DESC LIMIT 50');
+        allowClient();
+        $limit=max(1,min(100,(int)($_GET['limit'] ?? 50)));
+        $s=db()->query('SELECT * FROM agent_jobs ORDER BY created_at DESC LIMIT '.$limit);
         out(200,['jobs'=>array_map('safeJob',$s->fetchAll())]);
     }
     if ($route==='v1/jobs' && $method==='POST') {

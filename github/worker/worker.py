@@ -171,7 +171,7 @@ def exact_patch(job, path, workspace):
     return outcome
 
 
-def infer(prompt):
+def infer(prompt, system=None):
     # Server is available only inside the ephemeral runner, not over the public internet.
     llama='/tmp/llama.cpp/build/bin/llama-server'
     log=open(OUTPUT/'llama-server.log','w')
@@ -186,7 +186,8 @@ def infer(prompt):
             except requests.RequestException:pass
             time.sleep(4)
         else:raise RuntimeError('Model startup timeout')
-        req={'model':MODEL,'messages':[{'role':'system','content':'You are a code analysis assistant. Focus on authorized software, reproducible static analysis, and correct code edits. State uncertainty. Do not invent runtime observations.'},{'role':'user','content':prompt[:23000]}],'temperature':0.25,'max_tokens':1100,'stream':False}
+        system = system or 'You are a code analysis assistant. Focus on authorized software, reproducible static analysis, and correct code edits. State uncertainty. Do not invent runtime observations.'
+        req={'model':MODEL,'messages':[{'role':'system','content':system},{'role':'user','content':prompt[:23000]}],'temperature':0.25,'max_tokens':1100,'stream':False}
         response=requests.post('http://127.0.0.1:8080/v1/chat/completions',json=req,timeout=420)
         if response.status_code==400 and 'context' in response.text.lower():
             # Static findings can exceed the model context. Retry with a smaller, still-useful prompt.
@@ -227,8 +228,12 @@ def main():
             summary['analysis']=analyze(path,work,decode=(job['kind']=='patch'))
         if job['kind']=='patch':summary['patch']=exact_patch(job,path,work)
         (OUTPUT/'analysis.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
-        prompt='User request:\n'+job['prompt']+'\n\nStatic findings (bounded):\n'+json.dumps(summary,ensure_ascii=False)[:16000]
-        text=infer(prompt)
+        chat_system = ('You are a helpful, concise assistant. Answer the user directly and briefly. '
+                       'Never invent job metadata, findings or runtime observations.')
+        use_chat_system = (job['kind']=='chat' and not path)
+        prompt=('User request:\n'+job['prompt']+'\n\nStatic findings (bounded):\n'+json.dumps(summary,ensure_ascii=False)[:16000]
+                if not use_chat_system else job['prompt'])
+        text=infer(prompt, chat_system if use_chat_system else None)
         (OUTPUT/'model-response.txt').write_text(text,encoding='utf-8')
         z=report_artifact()
         try:
