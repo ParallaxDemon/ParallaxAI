@@ -1,0 +1,6 @@
+# Large downloaded assets and runtime logs — never commit these.
+bin/
+model/
+*.tar.gz
+*.gguf
+*.log

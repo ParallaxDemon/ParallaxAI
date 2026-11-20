@@ -1,4 +1,4 @@
-name: DeepSeek RE Agent (on demand)
+name: DeepSeek RE Agent (binary analysis; chat is served by the always-on local worker)
 
 on:
   workflow_dispatch:
@@ -50,11 +50,16 @@ jobs:
               job = json.load(r)
           name = (job.get('original_name') or '').strip()
           print('has_input=' + ('true' if name else 'false'))
-          print('kind=' + str(job.get('kind', 'chat')))
+          kind = str(job.get('kind', 'chat'))
+          print('kind=' + kind)
+          # Plain chats are answered by the always-on phone worker; skip expensive runner setup for them.
+          print('skip=' + ('true' if kind == 'chat' else 'false'))
           PY
       - name: Install Python dependency
+        if: steps.meta.outputs.skip != 'true'
         run: python -m pip install -q -r github/worker/requirements.txt
       - name: Download prebuilt llama-server (no source build)
+        if: steps.meta.outputs.skip != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +71,7 @@ jobs:
           test -x /tmp/llama.cpp/build/bin/llama-server
           /tmp/llama.cpp/build/bin/llama-server --version | head -1
       - name: Cache model
+        if: steps.meta.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -73,24 +79,25 @@ jobs:
             ~/.cache/llama.cpp
           key: deepseek-r1-1p5b-abliterated-q4km-v1
       - name: Setup Java for binary analysis
-        if: steps.meta.outputs.has_input == 'true'
+        if: steps.meta.outputs.skip != 'true' && (steps.meta.outputs.has_input == 'true')
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
       - name: Install binary analysis tools (uploads only)
-        if: steps.meta.outputs.has_input == 'true'
+        if: steps.meta.outputs.skip != 'true' && (steps.meta.outputs.has_input == 'true')
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends binutils file unzip git cmake g++ pkg-config libssl-dev libcurl4-openssl-dev apktool
           bash github/scripts/install-jadx.sh
       - name: Install Ghidra headless (optional)
-        if: steps.meta.outputs.has_input == 'true' && env.ENABLE_GHIDRA == 'true'
+        if: steps.meta.outputs.skip != 'true' && (steps.meta.outputs.has_input == 'true' && env.ENABLE_GHIDRA == 'true')
         run: bash github/scripts/install-ghidra.sh
       - name: Analyze and run DeepSeek
+        if: steps.meta.outputs.skip != 'true'
         run: python github/worker/worker.py
       - name: Report early failure to panel
-        if: failure()
+        if: steps.meta.outputs.skip != 'true' && (failure())
         shell: bash
         run: |
           python - <<'PY'
@@ -109,7 +116,7 @@ jobs:
               print('panel notification failed:', exc)
           PY
       - name: Save local artifact for recovery
-        if: always()
+        if: steps.meta.outputs.skip != 'true' && (always())
         uses: actions/upload-artifact@v4
         with:
           name: deepseek-job-${{ inputs.job_id }}
