@@ -229,6 +229,8 @@ def main():
         if job['kind']=='patch':summary['patch']=exact_patch(job,path,work)
         (OUTPUT/'analysis.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
         chat_system = ('You are a helpful, concise assistant. Answer the user directly and briefly. '
+                       'You are text-only: you cannot see, read, or open images or files. If an image is attached, '
+                       'say you cannot see images and ask the user to describe it in text. '
                        'Never invent job metadata, findings or runtime observations.')
         use_chat_system = (job['kind']=='chat' and not path)
         prompt=('User request:\n'+job['prompt']+'\n\nStatic findings (bounded):\n'+json.dumps(summary,ensure_ascii=False)[:16000]
