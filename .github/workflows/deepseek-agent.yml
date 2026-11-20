@@ -43,7 +43,9 @@ jobs:
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, urllib.request
           url = os.environ['PANEL_BASE_URL'].rstrip('/') + '/api/v1/jobs/' + os.environ['JOB_ID']
-          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['PANEL_API_KEY']})
+          headers = {'Authorization': 'Bearer ' + os.environ['PANEL_API_KEY'],
+                     'User-Agent': 'DeepSeek-agent'}
+          req = urllib.request.Request(url, headers=headers)
           with urllib.request.urlopen(req, timeout=20) as r:
               job = json.load(r)
           name = (job.get('original_name') or '').strip()
