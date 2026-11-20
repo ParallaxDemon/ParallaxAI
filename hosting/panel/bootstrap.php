@@ -62,7 +62,7 @@ function row(string $id): array {
 }
 function safeJob(array $j): array {
     return [
-        'id'=>$j['id'],'kind'=>$j['kind'],'status'=>$j['status'],
+        'id'=>$j['id'],'batch_id'=>$j['batch_id'] ?? null,'kind'=>$j['kind'],'status'=>$j['status'],
         'prompt'=>$j['prompt'],'original_name'=>$j['original_name'],
         'result'=>$j['result_text'],'error'=>$j['error_text'],
         'artifact_ready'=>(bool)$j['artifact_path'],
@@ -101,7 +101,7 @@ function dispatch(string $id): array {
     if ($status===204) return [true,'Workflow dispatched'];
     return [false,'GitHub API HTTP '.(int)$status.': '.substr($err ?: (string)$body,0,500)];
 }
-function makeJob(array $input): array {
+function makeJob(array $input, ?string $batchId = null): array {
     $kind=(string)($input['kind']??'chat');
     if (!in_array($kind,['chat','analyze','patch'],true)) out(400,['error'=>'Invalid job kind']);
     $prompt=trim((string)($input['prompt']??''));
@@ -119,9 +119,26 @@ function makeJob(array $input): array {
     if ($kind!=='chat' && !$file) out(400,['error'=>'Upload an APK, DEX, Smali or SO']);
     if ($kind==='patch' && !in_array(strtolower(pathinfo((string)$name,PATHINFO_EXTENSION)),['apk','smali'],true)) out(400,['error'=>'Patch supports APK Smali or standalone Smali only']);
     $id=bin2hex(random_bytes(16));
-    $s=db()->prepare('INSERT INTO agent_jobs (id,kind,status,prompt,patch_spec,original_name,input_path) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    $s->execute([$id,$kind,'queued',$prompt,$patch,$name,$file]);
+    $s=db()->prepare('INSERT INTO agent_jobs (id,batch_id,kind,status,prompt,patch_spec,original_name,input_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $s->execute([$id,$batchId,$kind,'queued',$prompt,$patch,$name,$file]);
     [$ok,$message]=dispatch($id);
     if (!$ok) { $s=db()->prepare('UPDATE agent_jobs SET status=?,error_text=? WHERE id=?');$s->execute(['dispatch_failed',$message,$id]); }
-    return ['id'=>$id,'status'=>$ok?'queued':'dispatch_failed','dispatch'=>$message,'status_url'=>'api/v1/jobs/'.$id];
+    return ['id'=>$id,'batch_id'=>$batchId,'status'=>$ok?'queued':'dispatch_failed','dispatch'=>$message,'status_url'=>'api/v1/jobs/'.$id];
+}
+function makeBatch(array $input): array {
+    $prompts = $input['prompts'] ?? null;
+    if (!is_array($prompts) || count($prompts) < 1 || count($prompts) > 20) out(400,['error'=>'prompts must be an array of 1 to 20 strings']);
+    $kind = (string)($input['kind'] ?? 'chat');
+    if ($kind !== 'chat') out(400,['error'=>'Batch mode supports chat only']);
+    $clean = [];
+    foreach ($prompts as $p) {
+        if (!is_string($p)) out(400,['error'=>'Every prompt must be a string']);
+        $p = trim($p);
+        if ($p === '' || mb_strlen($p) > 8000) out(400,['error'=>'Each prompt must be 1 to 8000 characters']);
+        $clean[] = $p;
+    }
+    $batch = bin2hex(random_bytes(16));
+    $jobs = [];
+    foreach ($clean as $p) $jobs[] = makeJob(['kind'=>'chat','prompt'=>$p], $batch);
+    return ['batch_id'=>$batch,'count'=>count($jobs),'jobs'=>$jobs,'status_url'=>'api/v1/batch/'.$batch];
 }

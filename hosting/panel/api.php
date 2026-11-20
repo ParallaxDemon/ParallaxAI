@@ -15,6 +15,17 @@ try {
         $in=str_contains(strtolower($_SERVER['CONTENT_TYPE']??''),'multipart/form-data')? $_POST:inputJson();
         out(202,makeJob($in));
     }
+    if ($route==='v1/batch' && $method==='POST') {
+        allowClient(true); out(202, makeBatch(inputJson()));
+    }
+    if (preg_match('~^v1/batch/([0-9a-f]{32})$~',$route,$m) && $method==='GET') {
+        allowClient();
+        $s=db()->prepare('SELECT * FROM agent_jobs WHERE batch_id=? ORDER BY created_at ASC, id ASC');
+        $s->execute([$m[1]]); $rows=$s->fetchAll();
+        if (!$rows) out(404,['error'=>'Batch not found']);
+        $done=0; foreach ($rows as $r) if ($r['status']==='done') $done++;
+        out(200,['batch_id'=>$m[1],'count'=>count($rows),'done'=>$done,'jobs'=>array_map('safeJob',$rows)]);
+    }
     if ($route==='v1/chat/completions' && $method==='POST') {
         allowClient(true);
         $in=inputJson(); $messages=$in['messages']??[];
