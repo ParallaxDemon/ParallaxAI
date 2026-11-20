@@ -1,0 +1,41 @@
+name: DeepSeek RE Watchdog (6h)
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: deepseek-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: Re-dispatch stalled or failed jobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check panel and re-dispatch
+        env:
+          PANEL_BASE_URL: ${{ secrets.PANEL_BASE_URL }}
+          PANEL_API_KEY: ${{ secrets.PANEL_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python github/scripts/watchdog.py
+      - name: Keep watchdog report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchdog-report
+          path: watchdog-report.json
+          if-no-files-found: ignore
+          retention-days: 7

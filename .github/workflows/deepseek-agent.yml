@@ -18,14 +18,17 @@ concurrency:
 jobs:
   deepseek-agent:
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 45
     env:
       PANEL_BASE_URL: ${{ secrets.PANEL_BASE_URL }}
       WORKER_KEY: ${{ secrets.WORKER_KEY }}
+      PANEL_API_KEY: ${{ secrets.PANEL_API_KEY }}
       MODEL_HF: mradermacher/DeepSeek-R1-Distill-Qwen-1.5B-abliterated-GGUF:Q4_K_M
       JOB_ID: ${{ inputs.job_id }}
+      LLAMA_RELEASE: b12556
       ENABLE_GHIDRA: ${{ vars.ENABLE_GHIDRA || 'false' }}
       PYTHONUNBUFFERED: '1'
+      LD_LIBRARY_PATH: /tmp/llama.cpp/build/bin
     steps:
       - name: Checkout worker
         uses: actions/checkout@v4
@@ -33,32 +36,55 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Setup Java for JADX and optional Ghidra
+      - name: Detect whether an input file was uploaded
+        id: meta
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.request
+          url = os.environ['PANEL_BASE_URL'].rstrip('/') + '/api/v1/jobs/' + os.environ['JOB_ID']
+          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['PANEL_API_KEY']})
+          with urllib.request.urlopen(req, timeout=20) as r:
+              job = json.load(r)
+          name = (job.get('original_name') or '').strip()
+          print('has_input=' + ('true' if name else 'false'))
+          print('kind=' + str(job.get('kind', 'chat')))
+          PY
+      - name: Install Python dependency
+        run: python -m pip install -q -r github/worker/requirements.txt
+      - name: Download prebuilt llama-server (no source build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/llama.cpp/build/bin
+          curl -fsSL --retry 3 --max-time 180 \
+            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_RELEASE}/llama-${LLAMA_RELEASE}-bin-ubuntu-x64.tar.gz" \
+            -o /tmp/llama-server.tgz
+          tar -xzf /tmp/llama-server.tgz -C /tmp/llama.cpp/build/bin --strip-components=1
+          test -x /tmp/llama.cpp/build/bin/llama-server
+          /tmp/llama.cpp/build/bin/llama-server --version | head -1
+      - name: Cache model
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/huggingface/hub
+            ~/.cache/llama.cpp
+          key: deepseek-r1-1p5b-abliterated-q4km-v1
+      - name: Setup Java for binary analysis
+        if: steps.meta.outputs.has_input == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
-      - name: Install binary analysis dependencies
+      - name: Install binary analysis tools (uploads only)
+        if: steps.meta.outputs.has_input == 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends binutils file unzip curl git cmake g++ pkg-config libssl-dev libcurl4-openssl-dev apktool
-          python -m pip install -r github/worker/requirements.txt
+          sudo apt-get install -y --no-install-recommends binutils file unzip git cmake g++ pkg-config libssl-dev libcurl4-openssl-dev apktool
           bash github/scripts/install-jadx.sh
       - name: Install Ghidra headless (optional)
-        if: env.ENABLE_GHIDRA == 'true'
+        if: steps.meta.outputs.has_input == 'true' && env.ENABLE_GHIDRA == 'true'
         run: bash github/scripts/install-ghidra.sh
-      - name: Cache Hugging Face model (optional, consumes Actions cache quota)
-        if: vars.CACHE_MODEL == 'true'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface/hub
-          key: deepseek-r1-1p5b-abliterated-q4km-2026
-      - name: Compile llama.cpp CPU backend
-        run: |
-          git clone --depth=1 https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
-          cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_OPENSSL=ON
-          cmake --build /tmp/llama.cpp/build --target llama-server --parallel 4
-          test -x /tmp/llama.cpp/build/bin/llama-server
       - name: Analyze and run DeepSeek
         run: python github/worker/worker.py
       - name: Save local artifact for recovery
