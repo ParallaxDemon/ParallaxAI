@@ -89,6 +89,25 @@ jobs:
         run: bash github/scripts/install-ghidra.sh
       - name: Analyze and run DeepSeek
         run: python github/worker/worker.py
+      - name: Report early failure to panel
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          url = (os.environ['PANEL_BASE_URL'].rstrip('/')
+                 + '/api/v1/worker/jobs/' + os.environ['JOB_ID'] + '/result')
+          payload = json.dumps({'status': 'failed',
+                                'error': 'GitHub Actions step failed before worker completed'}).encode()
+          req = urllib.request.Request(url, data=payload, method='POST', headers={
+              'Authorization': 'Bearer ' + os.environ['WORKER_KEY'],
+              'Content-Type': 'application/json', 'User-Agent': 'DeepSeek-agent'})
+          try:
+              with urllib.request.urlopen(req, timeout=20) as r:
+                  print('panel notified:', r.status)
+          except Exception as exc:
+              print('panel notification failed:', exc)
+          PY
       - name: Save local artifact for recovery
         if: always()
         uses: actions/upload-artifact@v4
