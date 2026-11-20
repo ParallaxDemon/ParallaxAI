@@ -53,7 +53,7 @@ def save_config(base, key):
     print('saved config to ' + str(CONFIG_PATH) + ' (mode 600)')
 
 
-def request(method, path, payload=None, raw=False, timeout=60):
+def request(method, path, payload=None, raw=False, timeout=60, allow_404=False):
     base, key = load_config()
     if not base or not key:
         die('not configured. Run: parallax config --base URL --key KEY')
@@ -72,6 +72,8 @@ def request(method, path, payload=None, raw=False, timeout=60):
                 return body
             return json.loads(body) if body.strip() else {}
     except urllib.error.HTTPError as exc:
+        if exc.code == 404 and allow_404:
+            return None
         body = exc.read().decode('utf-8', 'replace')
         try:
             detail = json.loads(body)
@@ -193,9 +195,8 @@ def cmd_batch(args):
 def cmd_status(args):
     target = args.target
     if len(target) == 32 and not args.batch:
-        try:
-            obj = request('GET', 'jobs/' + target)
-        except SystemExit:
+        obj = request('GET', 'jobs/' + target, allow_404=True)
+        if obj is None:
             obj = request('GET', 'batch/' + target)
         if args.json:
             emit(obj, True)
