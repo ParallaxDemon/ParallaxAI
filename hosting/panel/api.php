@@ -55,6 +55,8 @@ try {
         allowClient(true); $j=row($m[1]);
         if (!in_array($j['status'],['dispatch_failed','failed'],true)) out(409,['error'=>'Job is not retryable']);
         $s=db()->prepare('UPDATE agent_jobs SET status=?,error_text=NULL WHERE id=?');$s->execute(['queued',$m[1]]);
+        // Chats are retried by the always-on phone worker, never by GitHub Actions.
+        if (($j['kind'] ?? '') === 'chat') out(202,['ok'=>true,'dispatch'=>'answered by always-on phone worker']);
         [$ok,$msg]=dispatch($m[1]);
         if (!$ok) { $s=db()->prepare('UPDATE agent_jobs SET status=?,error_text=? WHERE id=?');$s->execute(['dispatch_failed',$msg,$m[1]]); }
         out($ok?202:502,['ok'=>$ok,'dispatch'=>$msg]);

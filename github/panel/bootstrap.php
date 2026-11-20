@@ -121,6 +121,12 @@ function makeJob(array $input): array {
     $id=bin2hex(random_bytes(16));
     $s=db()->prepare('INSERT INTO agent_jobs (id,kind,status,prompt,patch_spec,original_name,input_path) VALUES (?, ?, ?, ?, ?, ?, ?)');
     $s->execute([$id,$kind,'queued',$prompt,$patch,$name,$file]);
+    // Plain chats are answered by the always-on local phone worker (one long-running
+    // process), NOT by GitHub Actions. Only binary-analysis jobs dispatch a workflow,
+    // so we never spin up a runner for every chat message.
+    if ($kind === 'chat') {
+        return ['id'=>$id,'status'=>'queued','dispatch'=>'answered by always-on phone worker','status_url'=>'api/v1/jobs/'.$id];
+    }
     [$ok,$message]=dispatch($id);
     if (!$ok) { $s=db()->prepare('UPDATE agent_jobs SET status=?,error_text=? WHERE id=?');$s->execute(['dispatch_failed',$message,$id]); }
     return ['id'=>$id,'status'=>$ok?'queued':'dispatch_failed','dispatch'=>$message,'status_url'=>'api/v1/jobs/'.$id];

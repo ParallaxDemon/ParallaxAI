@@ -432,9 +432,16 @@ def main():
     worker_h = {"X-Worker-Key": c["worker_key"], "User-Agent": "ParallaxLocalWorker/1.0"}
     port = int(c.get("port", 8080))
     ensure_llama(c, port)
-    log("v2 curl-http worker ready")
+    session_seconds = int(c.get("session_seconds", 6 * 3600))
+    deadline = time.monotonic() + session_seconds
+    log("v2 curl-http worker ready (6h session = %ds)" % session_seconds)
     log("watching", base, "every", c.get("poll_seconds", 1.5), "s")
     while True:
+        # End the 6h session cleanly only when idle, so no job is ever cut off.
+        # The launcher restarts us immediately with a fresh session.
+        if time.monotonic() >= deadline:
+            log("6h session complete - clean exit for restart")
+            return
         try:
             jobs = http(base + "/api/v1/jobs", client_h, timeout=20).get("jobs", [])
             for job in jobs:

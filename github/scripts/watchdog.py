@@ -66,6 +66,10 @@ def main():
         jid = str(job.get('id', ''))
         if len(jid) != 32:
             continue
+        # Plain chats belong to the always-on phone worker. Never re-dispatch
+        # them to GitHub, not even when they look stalled or failed.
+        if str(job.get('kind', '')) == 'chat':
+            continue
         status = str(job.get('status', ''))
         age = age_minutes(job)
         if age > MAX_AGE_DAYS * 24 * 60:
